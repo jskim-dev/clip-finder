@@ -1,0 +1,146 @@
+ 
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Finder</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0f172a;color:#f8fafc;font-family:Arial,sans-serif}
+main{max-width:900px;margin:auto;padding:20px}
+h1{color:#38bdf8;margin-bottom:5px}
+p{color:#94a3b8}
+.panel,.video{background:#1e293b;border-radius:14px;padding:16px;margin:14px 0}
+label{display:block;margin:12px 0 6px}
+input,select,button{font-size:16px;border:0;border-radius:8px;padding:12px;width:100%}
+input,select{background:#334155;color:white}
+input[type=checkbox]{width:auto}
+button{background:#0284c7;color:white;font-weight:bold;margin-top:15px}
+button:disabled{opacity:.5}
+.video img{width:100%;border-radius:10px}
+.video h3{font-size:17px}
+.video p{font-size:14px;line-height:1.7}
+a{color:#38bdf8}
+#status{white-space:pre-wrap;line-height:1.6}
+</style>
+</head>
+<body>
+<main>
+<h1>Clip Finder</h1>
+<p>유튜브 영상 발굴 시스템</p>
+<div class="panel">
+<label>YouTube API 키</label>
+<input id="key" type="password" placeholder="발급받은 API 키" autocomplete="off">
+<label>검색어</label>
+<input id="query" value="ちいかわ">
+<label>영상 길이</label>
+<select id="duration">
+<option value="any">전체</option>
+<option value="medium">4~20분</option>
+<option value="long">20분 이상</option>
+</select>
+<label>정렬 기준</label>
+<select id="order">
+<option value="viewCount">조회수순</option>
+<option value="date">최신순</option>
+<option value="relevance">관련도순</option>
+</select>
+<label>최소 조회수</label>
+<input id="minViews" type="number" min="0" value="0">
+<label>
+<input id="cc" type="checkbox" checked>
+CC 라이선스만 검색
+</label>
+<button id="search">영상 검색</button>
+</div>
+<div id="status" role="status"></div>
+<div id="results"></div>
+<p>CC 표시만으로 저작권이나 수익화 권한이 보장되지는 않습니다.</p>
+</main>
+<script>
+const el = id => document.getElementById(id);
+const fmt = n => Number(n).toLocaleString('ko-KR');
+async function api(path, params, key) {
+  const url = new URL('https://www.googleapis.com/youtube/v3/' + path);
+  Object.entries({...params,key}).forEach(([k,v]) => url.searchParams.set(k,v));
+  const response = await fetch(url);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error?.message || 'API 오류 ' + response.status);
+  }
+  return data;
+}
+function duration(s) {
+  const m = s.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return s;
+  return [m[1] ? m[1]+'시간' : '',m[2] ? m[2]+'분' : '',(m[3]||0)+'초'].filter(Boolean).join(' ');
+}
+el('search').addEventListener('click', async () => {
+  const key = el('key').value.trim();
+  const q = el('query').value.trim();
+  const status = el('status');
+  const results = el('results');
+  results.replaceChildren();
+  if (!key || !q) {
+    status.textContent = 'API 키와 검색어를 입력하세요.';
+    return;
+  }
+  el('search').disabled = true;
+  status.textContent = '유튜브 영상 검색 중...';
+  try {
+    const params = {
+      part:'snippet',
+      type:'video',
+      q,
+      maxResults:'50',
+      order:el('order').value,
+      videoDuration:el('duration').value
+    };
+    if (el('cc').checked) params.videoLicense='creativeCommon';
+    const found = await api('search',params,key);
+    const ids = found.items.map(v=>v.id.videoId);
+    if (!ids.length) {
+      status.textContent='검색 결과가 없습니다. CC 필터를 해제하거나 검색어를 변경하세요.';
+      return;
+    }
+    const data = await api('videos',{
+      part:'snippet,statistics,contentDetails,status',
+      id:ids.join(',')
+    },key);
+    let count=0;
+    for (const v of data.items) {
+      const views=Number(v.statistics.viewCount||0);
+      if (views<Number(el('minViews').value||0)) continue;
+      const days=Math.max(1,(Date.now()-Date.parse(v.snippet.publishedAt))/86400000);
+      const card=document.createElement('article');
+      card.className='video';
+      const img=document.createElement('img');
+      img.src=v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default.url;
+      img.alt=v.snippet.title;
+      img.loading='lazy';
+      const title=document.createElement('h3');
+      title.textContent=v.snippet.title;
+      const info=document.createElement('p');
+      info.textContent='조회수 '+fmt(views)+'회 | '+duration(v.contentDetails.duration)+' | '+v.snippet.publishedAt.slice(0,10)+' | 하루 평균 '+fmt(Math.round(views/days))+'회 | '+(v.status.license==='creativeCommon'?'CC':'표준 라이선스');
+      const channel=document.createElement('p');
+      channel.textContent=v.snippet.channelTitle;
+      const link=document.createElement('a');
+      link.href='https://www.youtube.com/watch?v='+encodeURIComponent(v.id);
+      link.target='_blank';
+      link.rel='noopener noreferrer';
+      link.textContent='유튜브에서 영상 보기';
+      card.append(img,title,channel,info,link);
+      results.append(card);
+      count++;
+    }
+    status.textContent='검색 결과: '+count+'개 (최대 50개 후보 기준)';
+  } catch(e) {
+    status.textContent='검색 오류: '+e.message;
+  } finally {
+    el('search').disabled=false;
+  }
+});
+</script>
+</body>
+</html>
